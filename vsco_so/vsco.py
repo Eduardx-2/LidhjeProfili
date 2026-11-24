@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 import requests
-from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 if __package__:
@@ -193,49 +192,44 @@ class SessionDataApi:
             seen.add(next_cursor)
             cursor = next_cursor
 
-class Vsco(ErrorShow):
-    def __init__(self, error_text: str | None = None, selenium_stderr: str | None = None):
-        # Vsco() puede iniciar sin errores; registrar uno siempre exige texto.
-        if error_text is not None or selenium_stderr is not None:
-            super().__init__(error_text, selenium_stderr)
-        else:
-            self.error_text = None
-            self.selenium_stderr = None
-        self.URI = ""
-        
-    def session_scrap(self,html):
-        return BeautifulSoup(html, "html.parser")
+class Vsco:
 
-    def milisegundo(self,tiempoMili) -> str | None:
+    def __init__(self, uri: str):
+        self._uri = uri
+
+    def _milisegundo(self,tiempoMili) -> str | None:
         if tiempoMili is None:
             return None
         scd_t,mili = divmod(tiempoMili,1000)
         datetimes = datetime.fromtimestamp(scd_t).replace(microsecond=mili * 1000)
         return datetimes.strftime("%Y-%m-%d %H:%M:%S")
 
-    def base_name_acc(self, uri:str) -> str:
-        return uri.split("/")[3]
-    
-
-    def extract_info_json(self, payload=None, data=None, *, bayes=None):
-        if payload is None:
+    @property
+    def extract_info_json(self) -> dict:
+        if not self._uri.strip():
+            return ErrorShow("La URL del perfil no puede estar vacía.").error_json
+        try:
             with closing(self._profile_images()) as images:
-                result = self._extract_images(images, bayes=bayes)
+                result = self._extract_images(images)
             summary = result.pop()
             return {"images": result, "device_summary": summary}
-        if data is not None:
-            images = (data['entities']['images'][image_id]
-                      for image_id in dict.fromkeys(payload))
-        else:
-            images = (item['image'] for item in payload['media']
-                      if item.get('type') == 'image')
-        return self._extract_images(images, bayes=bayes)
+        except ProfileExtractionError as error:
+            return ErrorShow(str(error)).error_json
+        except WebDriverException as error:
+            return ErrorShow(
+                "No se pudo iniciar o utilizar Firefox mediante Selenium.",
+                selenium_stderr=str(error),
+            ).error_json
+        except requests.RequestException:
+            return ErrorShow(
+                "No se pudo obtener el perfil de VSCO tras solicitarlo a la API."
+            ).error_json
 
     def _profile_images(self):
         api = SessionDataApi()
         try:
-            with self.mainWebidrive() as driver:
-                with closing(api.iter_profile_pages(driver, self.URI)) as pages:
+            with self._main_webdriver() as driver:
+                with closing(api.iter_profile_pages(driver, self._uri)) as pages:
                     for page in pages:
                         for item in page['media']:
                             if item.get('type') == 'image':
@@ -244,17 +238,12 @@ class Vsco(ErrorShow):
         finally:
             api.close()
 
-    def iter_info_json(self):
-        with closing(self._profile_images()) as images:
-            for img in images:
-                yield self._image_info(img)
-
     def _image_info(self, img):
         return {"dataImages": ImageData(
-            captura_date=self.milisegundo(img.get('capture_date', img.get('captureDate'))),
-            captura_date_mili=self.milisegundo(img.get('capture_date_ms', img.get('captureDateMs'))),
-            upload_date=self.milisegundo(img.get('upload_date', img.get('uploadDate'))),
-            upload_update=self.milisegundo(img.get('last_updated', img.get('lastUpdated'))),
+            captura_date=self._milisegundo(img.get('capture_date', img.get('captureDate'))),
+            captura_date_mili=self._milisegundo(img.get('capture_date_ms', img.get('captureDateMs'))),
+            upload_date=self._milisegundo(img.get('upload_date', img.get('uploadDate'))),
+            upload_update=self._milisegundo(img.get('last_updated', img.get('lastUpdated'))),
             uri=img.get('responsive_url', img.get('responsiveUrl')),
         ).createInfoseidd()}
 
@@ -275,54 +264,10 @@ class Vsco(ErrorShow):
             dataJson.append(self._image_info(img))
         dataJson.append(identify_phone(make, model_phone_image, dates=dates, bayes=bayes)) 
         return dataJson
-        
-        #return identify_phone(make, model_phone_image, dates=dates, bayes=bayes)
-    
-    def vsco_json(self,data):
-        user = self.base_name_acc(self.URI)
-        id = data['sites']['siteByUsername'][user]['site']['id']
-        md = data['medias']['bySiteId'][str(id)]['medias']
-        id_images = [fotos_id['image'] for fotos_id in md]
-        print(self.extract_info_json(id_images,data))
-
-    def _testing__(self):
-        with Path(__file__).with_name("prueba.json").open(encoding="utf-8") as archv:
-            data = json.load(archv)
-        result = self.extract_info_json(data)
-        print(result)
-        return result
 
     @contextmanager
-    def mainWebidrive(self):
-     
+    def _main_webdriver(self):
         scraper = UserSession()
         with webdriver.Firefox(options=scraper.opt) as driver:
             driver.set_page_load_timeout(30) 
             yield driver
-
-
-def main():
-    s = Vsco()
-    try:
-        print(json.dumps(s.extract_info_json(), ensure_ascii=False))
-    except ProfileExtractionError as error:
-        ErrorShow.__init__(s, str(error))
-        print(s.error_str, file=sys.stderr)
-        return 1
-    except WebDriverException as error:
-        ErrorShow.__init__(
-            s, "No se pudo iniciar o utilizar Firefox mediante Selenium.",
-            selenium_stderr=str(error),
-        )
-        print(s.error_str, file=sys.stderr)
-        return 1
-    except requests.RequestException:
-        ErrorShow.__init__(s, "No se pudo obtener el perfil de VSCO tras solicitarlo a la API.")
-        print(s.error_str, file=sys.stderr)
-        return 1
-    return 0
-    
-
-if __name__ == "__main__":
-    sys.exit(main())
-    

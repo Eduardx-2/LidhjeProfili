@@ -77,7 +77,6 @@ class UserId:
         return self.current_cookie_web(required=True)
 
     def current_cookie_web(self, *, required=False):
-        "
         try:
             cookies = self.driver.get_cookies()
         except WebDriverException:

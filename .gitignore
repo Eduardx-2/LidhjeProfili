@@ -1,0 +1,13 @@
+# Tests
+**/tests/
+**/test_*
+**/*_test.*
+**/*.test.*
+
+# JSON files
+*.json
+**/*.json
+
+# Local and design assets
+/logo-concepts/
+/vsco/
